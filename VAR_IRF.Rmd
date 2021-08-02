@@ -1,0 +1,376 @@
+---
+title: "VAR_MSCI"
+author: "Masaki Mori"
+date: "2021/7/26"
+output:
+  html_document:
+    number_sections: yes
+  pdf_document: default
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning=FALSE)
+```
+
+<p><br></p>
+
+# 準備
+
+## 使用データ
+
+MSCIが提供している株式指数を用いた.
+
+- https://www.msci.com/
+
+ここでは, 次のデータを用いる.
+
+- 2016年4月から2019年3月までの4年間の,日本,シンガポール,アメリカの3カ国の日次株式指数
+
+## データの読込
+
+```{r}
+library(readxl) # パッケージの読込
+# xlsファイルを読込, 変数に代入
+JP <- read_excel("raw/JP.xls") # 日本
+SP <- read_excel("raw/SP.xls") # シンガポール
+US <- read_excel("raw/USA.xls") # アメリカ
+```
+
+## データの確認
+
+データを時系列に変換する.
+
+```{r}
+library(quantmod) # パッケージの読込
+library(lubridate) # パッケージの読み込み
+# 日付型の変換・xts型に変換
+preprocess <- function(df) {
+  df <- as.data.frame(df)
+  df$month <- sapply(df[,1], function(x) {
+    x <- gsub(",", "", x)
+    x <- gsub(" ", "/", x)
+    x <- gsub("Apr", "4", x)
+    x <- gsub("May", "5", x)
+    x <- gsub("Jun", "6", x)
+    x <- gsub("Jul", "7", x)
+    x <- gsub("Aug", "8", x)
+    x <- gsub("Sep", "9", x)
+    x <- gsub("Oct", "10", x)
+    x <- gsub("Nov", "11", x)
+    x <- gsub("Dec", "12", x)
+    x <- gsub("Jan", "1", x)
+    x <- gsub("Feb", "2", x)
+    x <- gsub("Mar", "3", x)
+  })
+  df$Date <- mdy(df$month)
+  df <- df[,-3]
+  df <- as.xts(read.zoo(df))
+}
+```
+```{r}
+JP <- preprocess(JP) #JPの日付型を変換
+SP <- preprocess(SP) #SPの日付型を変換
+US <- preprocess(US) #USの日付型を変換
+```
+
+日付情報が同じであるか確認する.
+
+```{r}
+sum(index(JP) != index(SP)) #JP,SPの日付が異なる数
+sum(index(JP) != index(US)) #JP,USの日付が異なる数
+```
+
+欠損値の有無を確認する.
+
+```{r}
+# データ結合
+MSCI <- cbind(JP,SP,US) #外生性の高い順に(=時差が短い順)
+MSCI <- MSCI['2016-01-01::2019-12-31']
+sum(is.na(MSCI)) #欠損地の数
+```
+
+データ数は次である.
+
+```{r}
+length(MSCI) # データ数
+```
+
+データの中身を確認する.
+
+```{r}
+head(MSCI) # 最初の数個を表示
+tail(MSCI) # 最後の数個を表示
+```
+
+# データの概要
+
+## 自己相関
+
+### 日本のボックステスト
+
+```{r}
+Box.test(JP, lag=5, type="Ljung") #ラグ5のかばん検定
+Box.test(JP, lag=10, type="Ljung") #ラグ10のかばん検定
+Box.test(JP, lag=15, type="Ljung") #ラグ15のかばん検定
+```
+日本のMSCIは、Ljung-Boxテストにおいて、全てにおいてp値が0.05より小さい為、有意水準5%で帰無仮説を棄却出来る。つまり、自己相関があると判断出来る。
+
+
+### シンガポールのボックステスト
+
+```{r}
+Box.test(JP, lag=5, type="Ljung") #ラグ5のかばん検定
+Box.test(JP, lag=10, type="Ljung") #ラグ10のかばん検定
+Box.test(JP, lag=15, type="Ljung") #ラグ15のかばん検定
+```
+
+シンガポールのMSCIは、Ljung-Boxテストにおいて、全てにおいてp値が0.05より小さい為、有意水準5%で帰無仮説を棄却出来る。つまり、自己相関があると判断出来る。
+
+### アメリカのボックステスト
+
+```{r}
+Box.test(US, lag=5, type="Ljung") #ラグ5のかばん検定
+Box.test(US, lag=10, type="Ljung") #ラグ10のかばん検定
+Box.test(US, lag=15, type="Ljung") #ラグ15のかばん検定
+```
+
+アメリカのMSCIは、Ljung-Boxテストにおいて、全てにおいてp値が0.05より小さい為、有意水準5%で帰無仮説を棄却出来る。つまり、自己相関があると判断出来る。
+
+### 対数収益率
+
+対数収益率 (%) に変換する.
+
+```{r}
+JP.r <- dailyReturn(MSCI$JP, type = 'log') * 100 # 日本
+SP.r <- dailyReturn(MSCI$SP, type = 'log') * 100 # シンガポール
+US.r <- dailyReturn(MSCI$US, type = 'log') * 100 # 香港
+MSCI.r <- cbind(JP.r, SP.r, US.r) # データを結合
+names(MSCI.r) <- names(MSCI) # 名を変更
+```
+
+
+### 単位根検定
+次はデータの単位根検定を行う。
+
+```{r}
+library(urca) # パッケージの読込
+```
+
+##### 日本の単位根検定
+
+```{r}
+# ADF検定
+ur.jp <- ur.df(JP.r, # データ
+               type = "trend", # Type 3
+               lags = 10, # ARの最大次数
+               selectlags = "BIC") # BICを用いてARの次数を決定
+ur.jp # 検定統計量の値
+ur.jp@cval # 棄却域
+```
+tau3,phi2,phi3全てにおいて有意水準1%で棄却する為、単位根は存在しない。
+
+##### シンガポールの単位根検定
+
+```{r}
+# ADF検定
+ur.jp <- ur.df(SP.r, # データ
+               type = "trend", # Type 3
+               lags = 10, # ARの最大次数
+               selectlags = "BIC") # BICを用いてARの次数を決定
+ur.jp # 検定統計量の値
+ur.jp@cval # 棄却域
+```
+tau3,phi2,phi3全てにおいて有意水準1%で棄却する為、単位根は存在しない。
+
+
+##### アメリカの単位根検定
+
+```{r}
+# ADF検定
+ur.jp <- ur.df(US.r, # データ
+               type = "trend", # Type 3
+               lags = 10, # ARの最大次数
+               selectlags = "BIC") # BICを用いてARの次数を決定
+ur.jp # 検定統計量の値
+ur.jp@cval # 棄却域
+```
+tau3,phi2,phi3全てにおいて有意水準1%で棄却する為、単位根は存在しない。よって3つのデータはI(0)であり、差分を取らず、このまま分析を行う。
+
+## 株式指数
+
+```{r}
+plot(MSCI) # 時系列プロット
+summary(coredata(MSCI)) # 株式指数の記述統計量
+```
+
+```{r fig.height = 6}
+acf(coredata(MSCI)) # 株式指数の自己相関
+```
+
+対角線を見ると、定常でないことが読み取れる
+
+
+```{r}
+plot(MSCI.r) # 時系列プロット
+summary(coredata(MSCI.r)) # 株式指数の対数収益率の記述統計量
+```
+
+```{r fig.height = 6}
+acf(coredata(MSCI.r)) # 株式指数の対数収益率の自己相関
+```
+日本は、ラグ,2,3,4,12に自己相関がありそうである。シンガポールは、ラグ2,5,9,13,22に自己相関がありそうである。最後に香港は、ラグ12と22に自己相関がありそうである。<br>
+また上三角部分を見ると、ラグ1,2のあたりで切断が起きており、VARモデルがあてはまりそうなことが分かる。
+
+# 推定
+
+パッケージ「vars」を用いて分析を行う.
+
+```{r}
+library(vars) # パッケージの読込
+```
+
+## 推定
+
+情報量基準を求める.
+
+```{r}
+(IC <- VARselect(MSCI.r)) # 情報量基準
+```
+ここでSC(n)はBIC基準である。
+AICではVAR(`r IC$selection[1]`), BICではVAR(`r IC$selection[3]`)であるから, 両方用いてパラメータ推定を行う.
+
+```{r}
+m.a <- VAR(MSCI.r, lag.max = 10, ic = "AIC") # AICによるモデルの推定
+m.b <- VAR(MSCI.r, lag.max = 10, ic = "SC") # BICによるモデルの推定
+```
+
+推定結果を表示する. VAR(`r IC$selection[1]`)の結果は量が多いので, VAR(`r IC$selection[3]`)の結果のみ表示する.
+
+```{r}
+summary(m.b) # 推定結果を表示
+```
+今回はインパルス応答関数を調べる為、予測がメイン。よって、係数の優意性から、係数を削除することはしない。
+
+## モデル診断
+
+残差の自己相関を調べ, モデルが適切かどうかを診断する.
+
+まず, コレログラムをプロットする.
+
+```{r fig.height = 6}
+acf(residuals(m.a)) # 残差の自己相関
+acf(residuals(m.b)) # 残差の自己相関 
+```
+
+次に, かばん検定を行う. 
+
+```{r}
+serial.test(m.a, lags.pt = 10, type = "PT.adjusted") # ラグ10
+serial.test(m.a, lags.pt = 15, type = "PT.adjusted") # ラグ15
+serial.test(m.a, lags.pt = 20, type = "PT.adjusted") # ラグ20
+```
+
+全てにおいてp値が0.05より大きいので, 有意水準5%で帰無仮説を棄却できない. つまり, 残差に自己相関があると判断できないので, 適切である．
+
+```{r}
+serial.test(m.b, lags.pt = 10, type = "PT.adjusted") # ラグ10
+serial.test(m.b, lags.pt = 15, type = "PT.adjusted") # ラグ15
+serial.test(m.b, lags.pt = 20, type = "PT.adjusted") # ラグ20
+```
+
+全てにおいてp値が0.05より小さいので, 有意水準5%で帰無仮説を棄却する．つまり, 残差に自己相関があると判断できるので, 適切でない．
+
+# 分析
+
+モデル診断の結果より, AICによるモデルの推定結果を用いて分析を行う.
+
+## グレンジャー因果性
+
+グレンジャー因果性の検定を行う.
+
+```{r}
+causality(m.a, cause = "JP") # JP → SP, US
+```
+
+これは, 1つの変数の他の全ての変数に対する検定であり, 他の1つの変数に対する検定ではない. 関数「causality」では, 他の1つの変数に対する検定を行うには2変量VARモデルを用いなければならない.
+
+### 日本とシンガポール
+
+```{r}
+JPSP <- cbind(MSCI.r$JP, MSCI.r$SP) # 日本とイギリスのデータ
+m1.a <- VAR(JPSP, lag.max =10, ic = "AIC") # AICによるモデルの推定
+m1.a$p # VARの次数
+serial.test(m1.a, lags.pt = 15, type = "PT.adjusted") # ラグ15のかばん検定
+```
+
+```{r}
+causality(m1.a, cause = "JP") # JP → SP
+```
+
+p値が0.05より大きいので, 有意水準5%で帰無仮説を棄却できない．つまり, 日本からシンガポールへのグレンジャー因果性は存在すると判断できない．
+
+```{r}
+causality(m1.a, cause = "SP") # SP → JP
+```
+
+p値が0.05より小さいので, 有意水準5%で帰無仮説を棄却する．つまり, シンガポールから日本へのグレンジャー因果性は存在すると判断できる．
+
+### 日本とアメリカ
+
+```{r}
+JPUS <- cbind(MSCI.r$JP, MSCI.r$US) # 日本とアメリカのデータ
+m2.a <- VAR(JPUS, lag.max =10, ic = "AIC") # AICによるモデルの推定
+m2.a$p # VARの次数
+serial.test(m2.a, lags.pt = 15, type = "PT.adjusted") # ラグ15のかばん検定
+```
+
+```{r}
+causality(m2.a, cause = "JP") # JP → US
+```
+
+p値が0.05より小さいので, 有意水準5%で帰無仮説を棄却する．つまり, アメリカから日本へのグレンジャー因果性は存在すると判断できる．
+
+```{r}
+causality(m2.a, cause = "US") # US → JP
+```
+
+p値が0.05より小さいので, 有意水準5%で帰無仮説を棄却する．つまり, アメリカから日本へのグレンジャー因果性は存在すると判断できる．
+
+### シンガポールとアメリカ
+
+```{r}
+SPUS <- cbind(MSCI.r$SP, MSCI.r$US) # イギリスとアメリカのデータ
+m3.a <- VAR(SPUS, lag.max =10, ic = "AIC") # AICによるモデルの推定
+m3.a$p # VARの次数
+serial.test(m3.a, lags.pt = 15, type = "PT.adjusted") # ラグ15のかばん検定
+```
+
+```{r}
+causality(m3.a, cause = "SP") # SP → US
+```
+
+p値が0.05より小さいので, 有意水準5%で帰無仮説を棄却する．つまり, シンガポールからアメリカへのグレンジャー因果性は存在すると判断できる
+
+```{r}
+causality(m3.a, cause = "US") # US → SP
+```
+
+p値が0.05より小さいので, 有意水準5%で帰無仮説を棄却する．つまり, アメリカからシンガポールへのグレンジャー因果性は存在すると判断できる
+
+## インパルス応答関数
+
+IRFを計算しプロットする.
+
+```{r}
+m.a.irf <- irf(m.a) # IRFを計算
+plot(m.a.irf) # プロット
+```
+
+## 分散分解
+
+RVCを計算しプロットする.
+
+```{r fig.height = 9}
+m.a.rvc <- fevd(m.a) # RVCを計算, Forecast Error Variance Decomposition
+plot(m.a.rvc) # プロット
+```
